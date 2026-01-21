@@ -1,8 +1,10 @@
 fastapi
+uvicorn[standard]
 pymongo
 python-dotenv
-passlib[bcrypt]
+pydantic
+pydantic[email]
+passlib
+bcrypt
 python-jose[cryptography]
 python-multipart
-email-validator
-mangum

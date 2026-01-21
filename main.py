@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from controller import router as auth_router
-from mangum import Mangum
+
 
 app = FastAPI(
     title="Authentication API",
@@ -33,8 +33,7 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-# Handler for Vercel serverless
-handler = Mangum(app)
+
 
 # For local development only
 if __name__ == "__main__":
