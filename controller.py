@@ -24,8 +24,8 @@ db = client[DATABASE_NAME]
 users_collection = db["users"]
 webhooks_collection = db["webhook"]
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - Updated to handle bcrypt's 72-byte limitation
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__ident="2b")
 
 # OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
@@ -34,14 +34,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-# Pydantic models (removed UserSignUp since we're using Form fields now)
+# Pydantic models
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
 class WebhookPayload(BaseModel):
-    # Define the expected webhook payload structure
-    # Adjust fields based on what you expect to receive
     event: str
     data: dict
     timestamp: Optional[datetime] = None
@@ -63,12 +61,20 @@ class UserResponse(BaseModel):
 
 
 # Helper functions
+def truncate_password(password: str) -> bytes:
+    """Truncate password to 72 bytes for bcrypt compatibility"""
+    password_bytes = password.encode('utf-8')
+    return password_bytes[:72]
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    truncated = truncate_password(plain_password)
+    return pwd_context.verify(truncated, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    truncated = truncate_password(password)
+    return pwd_context.hash(truncated)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -125,8 +131,6 @@ async def signup(
             detail="Phone number must be in format: 09056035245 (11 digits starting with 070-091)"
         )
 
-    # No need for additional password validation as min_length handles it
-
     existing_user = get_user_by_email(email)
     if existing_user:
         raise HTTPException(
@@ -181,14 +185,14 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@router.get("/me", response_model=UserResponse)
-async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    return UserResponse(
-        email=current_user["email"],
-        full_name=current_user["full_name"],
-        phone_number=current_user["phone_number"],
-        created_at=current_user["created_at"]
-    )
+# @router.get("/me", response_model=UserResponse)
+# async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+#     return UserResponse(
+#         email=current_user["email"],
+#         full_name=current_user["full_name"],
+#         phone_number=current_user["phone_number"],
+#         created_at=current_user["created_at"]
+#     )
 
 @router.get("/me")
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
