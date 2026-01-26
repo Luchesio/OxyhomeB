@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from controller import router as auth_router
-
+from instalment import router as invoice_router
+from mandate import router as mandate_router
 
 app = FastAPI(
     title="Authentication API",
@@ -18,8 +19,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include authentication router
+# Include routers
 app.include_router(auth_router)
+app.include_router(invoice_router)
+app.include_router(mandate_router)
 
 @app.get("/")
 async def root():
@@ -32,7 +35,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
-
 
 
 # For local development only

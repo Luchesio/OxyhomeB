@@ -55,7 +55,8 @@ class TokenData(BaseModel):
 
 class UserResponse(BaseModel):
     email: str
-    full_name: str
+    first_name: str
+    last_name: str
     phone_number: str
     created_at: datetime
 
@@ -75,6 +76,26 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     truncated = truncate_password(password)
     return pwd_context.hash(truncated)
+
+
+def convert_phone_to_international(phone_number: str) -> str:
+    """
+    Convert Nigerian phone number from 09056035245 to 2349056035245
+    Removes leading 0 and adds 234 country code
+    """
+    # Remove any whitespace
+    phone_number = phone_number.strip()
+    
+    # If it starts with 0, remove it and add 234
+    if phone_number.startswith('0'):
+        return '234' + phone_number[1:]
+    
+    # If it already starts with 234, return as is
+    if phone_number.startswith('234'):
+        return phone_number
+    
+    # Otherwise, just add 234
+    return '234' + phone_number
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -120,16 +141,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 async def signup(
     email: EmailStr = Form(...),
     password: str = Form(..., min_length=8),
+    confirm_password: str = Form(...),
     phone_number: str = Form(...),
-    full_name: str = Form(...)
+    first_name: str = Form(...),
+    last_name: str = Form(...)
 ):
-    # Validate phone number
+    # Validate that passwords match
+    if password != confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match"
+        )
+    
+    # Validate phone number (Nigerian format)
     pattern = r'^0[7-9][0-1]\d{8}$'
     if not re.match(pattern, phone_number):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Phone number must be in format: 09056035245 (11 digits starting with 070-091)"
         )
+
+    # Convert phone number to international format (234...)
+    international_phone = convert_phone_to_international(phone_number)
 
     existing_user = get_user_by_email(email)
     if existing_user:
@@ -138,7 +171,8 @@ async def signup(
             detail="Email already registered"
         )
 
-    existing_phone = users_collection.find_one({"phone_number": phone_number})
+    # Check if international phone number already exists
+    existing_phone = users_collection.find_one({"phone_number": international_phone})
     if existing_phone:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -148,8 +182,9 @@ async def signup(
     user_dict = {
         "email": email,
         "password": get_password_hash(password),
-        "phone_number": phone_number,
-        "full_name": full_name,
+        "phone_number": international_phone,  # Store in international format
+        "first_name": first_name,
+        "last_name": last_name,
         "created_at": datetime.utcnow()
     }
 
@@ -163,7 +198,8 @@ async def signup(
     created_user = users_collection.find_one({"_id": result.inserted_id})
     return UserResponse(
         email=created_user["email"],
-        full_name=created_user["full_name"],
+        first_name=created_user["first_name"],
+        last_name=created_user["last_name"],
         phone_number=created_user["phone_number"],
         created_at=created_user["created_at"]
     )
@@ -185,20 +221,12 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-# @router.get("/me", response_model=UserResponse)
-# async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-#     return UserResponse(
-#         email=current_user["email"],
-#         full_name=current_user["full_name"],
-#         phone_number=current_user["phone_number"],
-#         created_at=current_user["created_at"]
-#     )
-
 @router.get("/me")
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """Get current user information"""
     return {
-        "full_name": current_user.get("full_name"),
+        "first_name": current_user.get("first_name"),
+        "last_name": current_user.get("last_name"),
         "email": current_user.get("email"),
         "phone_number": current_user.get("phone_number"),
         "created_at": current_user.get("created_at"),
