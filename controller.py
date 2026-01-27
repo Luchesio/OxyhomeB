@@ -61,6 +61,19 @@ class UserResponse(BaseModel):
     created_at: datetime
 
 
+class UserUpdateRequest(BaseModel):
+    first_name: str
+    last_name: str
+    email: EmailStr
+    phone_number: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
+
+
 # Helper functions
 def truncate_password(password: str) -> bytes:
     """Truncate password to 72 bytes for bcrypt compatibility"""
@@ -231,6 +244,120 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
         "phone_number": current_user.get("phone_number"),
         "created_at": current_user.get("created_at"),
         "id": str(current_user.get("_id"))
+    }
+
+
+@router.put("/me", response_model=UserResponse)
+async def update_user_profile(
+    update_data: UserUpdateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update current user's profile information"""
+    
+    # Check if email is being changed and if it's already taken by another user
+    if update_data.email != current_user["email"]:
+        existing_user = get_user_by_email(update_data.email)
+        if existing_user and str(existing_user["_id"]) != str(current_user["_id"]):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+    
+    # Convert phone number to international format
+    international_phone = convert_phone_to_international(update_data.phone_number)
+    
+    # Check if phone number is being changed and if it's already taken by another user
+    if international_phone != current_user["phone_number"]:
+        existing_phone = users_collection.find_one({"phone_number": international_phone})
+        if existing_phone and str(existing_phone["_id"]) != str(current_user["_id"]):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number already registered"
+            )
+    
+    # Update user data
+    update_dict = {
+        "first_name": update_data.first_name,
+        "last_name": update_data.last_name,
+        "email": update_data.email,
+        "phone_number": international_phone
+    }
+    
+    result = users_collection.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": update_dict}
+    )
+    
+    if result.modified_count == 0 and result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update profile"
+        )
+    
+    # Fetch updated user
+    updated_user = users_collection.find_one({"_id": current_user["_id"]})
+    
+    return UserResponse(
+        email=updated_user["email"],
+        first_name=updated_user["first_name"],
+        last_name=updated_user["last_name"],
+        phone_number=updated_user["phone_number"],
+        created_at=updated_user["created_at"]
+    )
+
+
+@router.post("/change-password")
+async def change_password(
+    password_data: PasswordChangeRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Change user's password"""
+    
+    # Verify current password
+    if not verify_password(password_data.current_password, current_user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    
+    # Check if new passwords match
+    if password_data.new_password != password_data.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New passwords do not match"
+        )
+    
+    # Validate new password length
+    if len(password_data.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 8 characters long"
+        )
+    
+    # Check if new password is different from current password
+    if password_data.current_password == password_data.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password"
+        )
+    
+    # Hash and update password
+    new_password_hash = get_password_hash(password_data.new_password)
+    
+    result = users_collection.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {"password": new_password_hash}}
+    )
+    
+    if result.modified_count == 0 and result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update password"
+        )
+    
+    return {
+        "status": "success",
+        "message": "Password updated successfully"
     }
 
 
