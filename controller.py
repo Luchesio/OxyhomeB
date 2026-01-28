@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Form
+from fastapi import APIRouter, HTTPException, status, Depends, Form, Request, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
@@ -9,6 +9,7 @@ import re
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import os
+import hashlib
 
 load_dotenv()
 
@@ -16,6 +17,7 @@ load_dotenv()
 MONGODB_URI = os.getenv("MONGODB_URI")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 SECRET_KEY = os.getenv("SECRET_KEY")
+WEBHOOK_SECRET_KEY = os.getenv("secretKey")  # This is the secretKey for webhook signature
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = 525600  # Default token expiration time
 
@@ -39,10 +41,74 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+
+class WebhookData(BaseModel):
+    payment_date: Optional[str] = None
+    invoice_number: Optional[str] = None
+    account_number: Optional[str] = None
+    provider: Optional[str] = None
+    point_type: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    address_building_number: Optional[str] = None
+    address_street: Optional[str] = None
+    address_city: Optional[str] = None
+    address_post_code: Optional[str] = None
+
+
+class WebhookMeta(BaseModel):
+    grb_status: Optional[str] = None
+    pwt_item_description: Optional[str] = None
+    pwt_item_code: Optional[str] = None
+    pwt_item_amount: Optional[int] = None
+    lock_account: Optional[bool] = None
+    transaction_date: Optional[str] = None
+    created_date: Optional[str] = None
+    biller_id: Optional[str] = None
+    biller_item_id: Optional[str] = None
+    processing_method: Optional[str] = None
+    page_id: Optional[int] = None
+    currency: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    address_building_number: Optional[str] = None
+    address_street: Optional[str] = None
+    address_city: Optional[str] = None
+    address_post_code: Optional[str] = None
+    provider_auth_token: Optional[str] = None
+    payment_option: Optional[str] = None
+    fulfilment_delivery: Optional[str] = None
+    note: Optional[str] = None
+
+
+class WebhookDetails(BaseModel):
+    amount: Optional[str] = None
+    transaction_type: Optional[str] = None
+    transaction_ref: Optional[str] = None
+    transaction_desc: Optional[str] = None
+    status: Optional[str] = None
+    provider: Optional[str] = None
+    customer_ref: Optional[str] = None
+    customer_email: Optional[str] = None
+    customer_firstname: Optional[str] = None
+    customer_surname: Optional[str] = None
+    customer_mobile_no: Optional[str] = None
+    data: Optional[WebhookData] = None
+    meta: Optional[WebhookMeta] = None
+
+
+class WebhookAppInfo(BaseModel):
+    app_code: Optional[str] = None
+
+
 class WebhookPayload(BaseModel):
-    event: str
-    data: dict
-    timestamp: Optional[datetime] = None
+    request_ref: str
+    request_type: Optional[str] = None
+    requester: Optional[str] = None
+    mock_mode: Optional[str] = None
+    details: Optional[WebhookDetails] = None
+    app_info: Optional[WebhookAppInfo] = None
+
 
 class Token(BaseModel):
     access_token: str
@@ -109,6 +175,25 @@ def convert_phone_to_international(phone_number: str) -> str:
     
     # Otherwise, just add 234
     return '234' + phone_number
+
+
+def verify_webhook_signature(request_ref: str, signature: str, secret_key: str) -> bool:
+    """
+    Verify webhook signature using MD5 hash
+    
+    Args:
+        request_ref: The request reference from webhook payload
+        signature: The signature from webhook header
+        secret_key: The secret key from environment
+    
+    Returns:
+        bool: True if signature is valid, False otherwise
+    """
+    # Generate expected signature: MD5Hash(request_ref;secretKey)
+    combined_string = f"{request_ref};{secret_key}"
+    expected_signature = hashlib.md5(combined_string.encode('utf-8')).hexdigest()
+    
+    return signature.lower() == expected_signature.lower()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -362,16 +447,36 @@ async def change_password(
 
 
 @router.post("/webhook")
-async def receive_webhook(payload: WebhookPayload):
-    """Receive and store webhook data"""
+async def receive_webhook(
+    payload: WebhookPayload,
+    signature: str = Header(..., alias="Signature")
+):
+    """
+    Receive and store webhook data with signature verification.
+    
+    The signature should be: MD5Hash(request_ref;secretKey)
+    """
     try:
+        # Verify webhook signature
+        if not verify_webhook_signature(payload.request_ref, signature, WEBHOOK_SECRET_KEY):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid webhook signature"
+            )
+        
+        # Convert payload to dict for storage
         webhook_data = {
-            "event": payload.event,
-            "data": payload.data,
-            "timestamp": payload.timestamp or datetime.utcnow(),
-            "received_at": datetime.utcnow()
+            "request_ref": payload.request_ref,
+            "request_type": payload.request_type,
+            "requester": payload.requester,
+            "mock_mode": payload.mock_mode,
+            "details": payload.details.model_dump() if payload.details else None,
+            "app_info": payload.app_info.model_dump() if payload.app_info else None,
+            "received_at": datetime.utcnow(),
+            "signature": signature
         }
         
+        # Store webhook in database
         result = webhooks_collection.insert_one(webhook_data)
         
         if not result.inserted_id:
@@ -380,11 +485,15 @@ async def receive_webhook(payload: WebhookPayload):
                 detail="Failed to store webhook data"
             )
         
+        # Return the expected response format
         return {
-            "status": "success",
-            "message": "Webhook received and stored",
-            "id": str(result.inserted_id)
+            "status": "Successful",
+            "message": "Ticket issued",
+            "data": {}
         }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -395,10 +504,20 @@ async def receive_webhook(payload: WebhookPayload):
 @router.get("/webhooks")
 async def get_all_webhooks(current_user: dict = Depends(get_current_user)):
     """Retrieve all webhook entries from database (requires authentication)"""
-    webhooks = list(webhooks_collection.find({}).sort("received_at", -1))
-    
-    # Convert ObjectId to string for JSON serialization
-    for webhook in webhooks:
-        webhook["_id"] = str(webhook["_id"])
-    
-    return {"webhooks": webhooks, "count": len(webhooks)}
+    try:
+        webhooks = list(webhooks_collection.find({}).sort("received_at", -1))
+        
+        # Convert ObjectId to string for JSON serialization
+        for webhook in webhooks:
+            webhook["_id"] = str(webhook["_id"])
+        
+        return {
+            "status": "success",
+            "webhooks": webhooks,
+            "count": len(webhooks)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving webhooks: {str(e)}"
+        )
