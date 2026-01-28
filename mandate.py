@@ -49,7 +49,7 @@ class Meta(BaseModel):
 
 
 class Transaction(BaseModel):
-    mock_mode: str = "Live"
+    mock_mode: str = "Inspect"
     transaction_ref: str
     transaction_desc: str = "Check active mandates"
     transaction_ref_parent: None = None
