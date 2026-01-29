@@ -5,6 +5,7 @@ from instalment import router as invoice_router
 from mandate import router as mandate_router
 from getbanks import router as banks_router
 from bank_accounts import router as bank_accounts_router
+from wallet import router as wallet_router
 
 app = FastAPI(
     title="Authentication API",
@@ -27,6 +28,7 @@ app.include_router(invoice_router)
 app.include_router(mandate_router)
 app.include_router(banks_router)
 app.include_router(bank_accounts_router)
+app.include_router(wallet_router)
 
 @app.get("/")
 async def root():
